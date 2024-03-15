@@ -1,4 +1,7 @@
-use std::{collections::HashMap, path::Path};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use anyhow::anyhow;
 use chacha20poly1305::{
@@ -7,10 +10,8 @@ use chacha20poly1305::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::store::PasswordStore;
+use crate::store::{Entry, PasswordStore};
 use crate::Result;
-
-const PASSWORD: &str = "TEST_PASS";
 
 fn key_from_password(password: &str) -> [u8; 32] {
     let mut key = [0u8; 32];
@@ -26,8 +27,8 @@ fn key_from_password(password: &str) -> [u8; 32] {
     key
 }
 
-impl From<HashMap<String, String>> for Config {
-    fn from(value: HashMap<String, String>) -> Self {
+impl From<HashMap<String, (String, String)>> for Config {
+    fn from(value: HashMap<String, (String, String)>) -> Self {
         Config {
             store: PasswordStore::from(value),
         }
@@ -46,23 +47,27 @@ impl Config {
         }
     }
 
-    pub fn add_entry(&mut self, account: &str, password: &str) -> Result<()> {
-        self.store
-            .add_password(account.to_string(), password.to_string())
+    pub fn add_entry(&mut self, account: &str, entry: Entry) -> Result<()> {
+        self.store.add_entry(account, entry)
     }
 
-    pub fn get_entry(&self, account: &str) -> Option<&String> {
-        self.store.get_password(account)
+    pub fn get_entry(&self, account: &str) -> Option<&Entry> {
+        //self.store.get_password(account)
+        self.store.get_entry(account)
+    }
+
+    pub fn get_all_entries(&self) -> impl Iterator<Item = (&String, &Entry)> {
+        self.store.entries()
     }
 
     /// Reads and decrypts config from file.
-    pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
+    pub fn from_file(path: impl AsRef<Path>, db_password: &str) -> Result<Self> {
         let contents = std::fs::read(path)?;
 
         let nonce = &contents[0..24];
         let payload = &contents[24..];
 
-        let cipher = XChaCha20Poly1305::new(&key_from_password(PASSWORD).into());
+        let cipher = XChaCha20Poly1305::new(&key_from_password(db_password).into());
 
         let original = cipher
             .decrypt(nonce.into(), payload)
@@ -72,11 +77,11 @@ impl Config {
     }
 
     /// Get encrypted bytes.
-    pub fn encrypt_bytes(&self) -> Result<Vec<u8>> {
+    pub fn encrypt_bytes(&self, db_password: &str) -> Result<Vec<u8>> {
         let yaml = serde_yaml::to_string(self)?;
 
         let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
-        let cipher = XChaCha20Poly1305::new(&key_from_password(PASSWORD).into());
+        let cipher = XChaCha20Poly1305::new(&key_from_password(db_password).into());
 
         let ciphertext = cipher
             .encrypt(&nonce, yaml.as_bytes())
@@ -87,41 +92,72 @@ impl Config {
 }
 
 /// Creates an empty db file at `path/{name}.pwm`
-pub fn create_empty_db(name: &str, path: impl AsRef<Path>) -> Result<()> {
+pub fn create_empty_db(
+    name: &str,
+    db_password: &str,
+    path: impl AsRef<Path>,
+) -> Result<()> {
     let config = Config::new();
 
     std::fs::write(
         path.as_ref().join(format!("{name}.pwm")),
-        config.encrypt_bytes()?,
+        config.encrypt_bytes(db_password)?,
     )?;
     Ok(())
 }
 
-pub fn create_db(name: &str, config: Config, path: impl AsRef<Path>) -> Result<()> {
+pub fn create_db(
+    name: &str,
+    db_password: &str,
+    config: Config,
+    path: impl AsRef<Path>,
+) -> Result<()> {
     std::fs::write(
         path.as_ref().join(format!("{name}.pwm")),
-        config.encrypt_bytes()?,
+        config.encrypt_bytes(db_password)?,
     )?;
 
     Ok(())
+}
+
+struct DBInfo {
+    path: PathBuf,
+    password: String,
 }
 
 pub fn add_entry(
     db_path: impl AsRef<Path>,
+    db_password: &str,
     account: &str,
-    password: &str,
+    entry: Entry,
 ) -> Result<()> {
-    let mut config: Config = Config::from_file(&db_path)?;
+    let mut config: Config = Config::from_file(&db_path, db_password)?;
 
-    config.add_entry(account, password)?;
+    config.add_entry(account, entry)?;
 
-    std::fs::write(db_path, config.encrypt_bytes()?)?;
+    std::fs::write(db_path, config.encrypt_bytes(db_password)?)?;
 
     Ok(())
 }
 
-pub fn get_entry(db_path: impl AsRef<Path>, account: &str) -> Result<String> {
-    let config = Config::from_file(&db_path)?;
+pub fn get_all_entries(
+    db_path: impl AsRef<Path>,
+    db_password: &str,
+) -> Result<Vec<(String, Entry)>> {
+    let config = Config::from_file(&db_path, db_password)?;
+
+    Ok(config
+        .get_all_entries()
+        .map(|(acc, entry)| (acc.clone(), entry.clone()))
+        .collect())
+}
+
+pub fn get_entry(
+    db_path: impl AsRef<Path>,
+    db_password: &str,
+    account: &str,
+) -> Result<Entry> {
+    let config = Config::from_file(&db_path, db_password)?;
 
     config
         .get_entry(account)
@@ -137,10 +173,18 @@ mod test {
 
     use super::*;
 
+    const PASSWORD: &str = "TEST_PASS";
+
     fn mock_config() -> Config {
         Config::from(HashMap::from([
-            ("foo".to_string(), "pass1".to_string()),
-            ("bar".to_string(), "pass2".to_string()),
+            (
+                "foo".to_string(),
+                ("foo@gmail.com".to_string(), "pass1".to_string()),
+            ),
+            (
+                "bar".to_string(),
+                ("bar@gmail.com".to_string(), "pass2".to_string()),
+            ),
         ]))
     }
 
@@ -151,10 +195,10 @@ mod test {
         let dir = TempDir::new("empty_db").unwrap();
         let db_name = "my_test_db";
 
-        create_empty_db(db_name, dir.path()).unwrap();
+        create_empty_db(db_name, PASSWORD, dir.path()).unwrap();
 
         let config: Config =
-            Config::from_file(dir.path().join("my_test_db.pwm")).unwrap();
+            Config::from_file(dir.path().join("my_test_db.pwm"), PASSWORD).unwrap();
 
         assert!(config.store.is_empty());
     }
@@ -166,11 +210,19 @@ mod test {
         let dir = TempDir::new("store_password").unwrap();
         let file_path = dir.path().join("test.pwm");
 
-        create_db("test", config, dir.path()).unwrap();
-        add_entry(&file_path, "baz", "pass3").unwrap();
+        create_db("test", PASSWORD, config, dir.path()).unwrap();
+        add_entry(
+            &file_path,
+            PASSWORD,
+            "baz",
+            Entry {
+                username: "example.com".to_string(),
+                password: "pass3".to_string(),
+            },
+        )
+        .unwrap();
+        let entry = get_entry(&file_path, PASSWORD, "baz").unwrap();
 
-        let config = Config::from_file(&file_path).unwrap();
-
-        assert_eq!(config.get_entry("baz"), Some(&"pass3".to_owned()));
+        assert_eq!(entry.password, String::from("pass3"));
     }
 }
