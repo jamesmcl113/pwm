@@ -1,7 +1,4 @@
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-};
+use std::{collections::HashMap, path::Path};
 
 use anyhow::anyhow;
 use chacha20poly1305::{
@@ -89,80 +86,6 @@ impl Config {
 
         Ok(vec![nonce.to_vec(), ciphertext].concat())
     }
-}
-
-/// Creates an empty db file at `path/{name}.pwm`
-pub fn create_empty_db(
-    name: &str,
-    db_password: &str,
-    path: impl AsRef<Path>,
-) -> Result<()> {
-    let config = Config::new();
-
-    std::fs::write(
-        path.as_ref().join(format!("{name}.pwm")),
-        config.encrypt_bytes(db_password)?,
-    )?;
-    Ok(())
-}
-
-pub fn create_db(
-    name: &str,
-    db_password: &str,
-    config: Config,
-    path: impl AsRef<Path>,
-) -> Result<()> {
-    std::fs::write(
-        path.as_ref().join(format!("{name}.pwm")),
-        config.encrypt_bytes(db_password)?,
-    )?;
-
-    Ok(())
-}
-
-struct DBInfo {
-    path: PathBuf,
-    password: String,
-}
-
-pub fn add_entry(
-    db_path: impl AsRef<Path>,
-    db_password: &str,
-    account: &str,
-    entry: Entry,
-) -> Result<()> {
-    let mut config: Config = Config::from_file(&db_path, db_password)?;
-
-    config.add_entry(account, entry)?;
-
-    std::fs::write(db_path, config.encrypt_bytes(db_password)?)?;
-
-    Ok(())
-}
-
-pub fn get_all_entries(
-    db_path: impl AsRef<Path>,
-    db_password: &str,
-) -> Result<Vec<(String, Entry)>> {
-    let config = Config::from_file(&db_path, db_password)?;
-
-    Ok(config
-        .get_all_entries()
-        .map(|(acc, entry)| (acc.clone(), entry.clone()))
-        .collect())
-}
-
-pub fn get_entry(
-    db_path: impl AsRef<Path>,
-    db_password: &str,
-    account: &str,
-) -> Result<Entry> {
-    let config = Config::from_file(&db_path, db_password)?;
-
-    config
-        .get_entry(account)
-        .map(|p| p.clone())
-        .ok_or(anyhow!("Account `{account}` not found in db."))
 }
 
 #[cfg(test)]

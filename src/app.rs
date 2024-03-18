@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use crate::cli::{Cli, Command, JsonPayload};
+use crate::db::DB;
 use crate::store::Entry;
 use crate::{config, Result};
 
@@ -30,42 +31,40 @@ impl App {
             }
         };
 
+        let db = DB::new(&db_password);
+
         match cli.command {
             Some(cmd) => match cmd {
                 Command::Add {
-                    db,
+                    db_file,
                     account,
                     username,
                     pass,
-                } => execute_add_command(&db, &db_password, account, username, pass),
-                Command::Get { db, account } => {
-                    execute_get_command(&db, &db_password, account)
-                }
-                Command::Init { name } => {
-                    match config::create_empty_db(
-                        &name,
-                        &db_password,
-                        std::env::current_dir()?,
-                    ) {
-                        Ok(_) => {
-                            println!("Successfully created db `{name}`");
-                            Ok(())
-                        }
-                        Err(e) => {
-                            Err(anyhow!("Failed to run command `init`. Err = {e:?}"))
-                        }
-                    }
-                }
-                Command::AddJson { db, payload } => {
-                    let payload: JsonPayload = serde_json::from_str(&payload)?;
-                    let path = std::env::current_dir()?.join(&db);
+                } => {
+                    let entry = Entry {
+                        username,
+                        password: pass,
+                    };
 
-                    execute_add_command(
-                        &path,
-                        &db_password,
-                        payload.account,
-                        payload.username,
-                        payload.password,
+                    db.add_entry(&db_file, &account, entry)
+                }
+                Command::Get { db_file, account } => {
+                    execute_get_command(&db, &db_file, account)
+                }
+                Command::Init { name } => db.create_empty(
+                    std::env::current_dir()?.join(format!("{name}.pwm")),
+                ),
+                Command::AddJson { db_file, payload } => {
+                    let payload: JsonPayload = serde_json::from_str(&payload)?;
+                    let path = std::env::current_dir()?.join(&db_file);
+
+                    db.add_entry(
+                        path,
+                        &payload.account,
+                        Entry {
+                            username: payload.username,
+                            password: payload.password,
+                        },
                     )
                 }
             },
@@ -74,53 +73,26 @@ impl App {
     }
 }
 
+fn display_entry(account: &str, entry: &Entry) {
+    println!("`{account}`:\n  {}: {}", entry.username, entry.password);
+}
+
 fn execute_get_command(
+    db: &DB,
     db_path: impl AsRef<Path>,
-    db_password: &str,
     account: Option<String>,
 ) -> Result<()> {
     let path = std::env::current_dir()?.join(&db_path);
 
     if let Some(account) = account {
-        match config::get_entry(&path, &db_password, &account) {
-            Err(e) => Err(anyhow!("Failed to run command `get`. Err = {:?}", e)),
-            Ok(Entry { username, password }) => {
-                println!("`{account}`:\n  {username}: {password}",);
-                Ok(())
-            }
-        }
+        let entry = db.get_entry(&path, &account)?;
+        display_entry(&account, &entry);
     } else {
-        match config::get_all_entries(&path, &db_password) {
-            Ok(entries) => {
-                for (account, Entry { username, password }) in entries {
-                    println!("`{account}`:\n  {username}: {password}",)
-                }
-                Ok(())
-            }
-            Err(e) => Err(anyhow!("Failed to run command `get`. Err = {:?}", e)),
-        }
+        let entries = db.get_all_entries(&path)?;
+        entries.iter().for_each(|(account, entry)| {
+            display_entry(&account, &entry);
+        })
     }
-}
 
-fn execute_add_command(
-    db_path: impl AsRef<Path>,
-    db_password: &str,
-    account: String,
-    username: String,
-    password: String,
-) -> Result<()> {
-    let path = std::env::current_dir()?.join(&db_path);
-
-    match config::add_entry(
-        &path,
-        db_password,
-        &account,
-        Entry { username, password },
-    ) {
-        Ok(_) => {
-            println!("Added account: {account} to {:?}", db_path.as_ref());
-            Ok(())
-        }
-        Err(e) => Err(anyhow!("Failed to run command `add`. Err = {:?}", e)),
-    }
+    Ok(())
 }

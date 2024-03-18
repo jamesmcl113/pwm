@@ -1,4 +1,4 @@
-use clap::{Args, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 
 #[derive(Parser)]
@@ -17,7 +17,7 @@ pub enum Command {
     /// Add password to file.
     Add {
         /// The password file
-        db: String,
+        db_file: String,
 
         /// Name for the account entry e.g. 'github.com'
         #[arg(short)]
@@ -34,13 +34,16 @@ pub enum Command {
     /// Add password to file from JSON payload. Payload *MUST* contain account, username and
     /// password keys.
     AddJson {
-        db: String,
+        db_file: String,
 
         #[arg(short)]
         payload: String,
     },
     /// Print password from file. If `account` is not provided, prints all entries in db.
-    Get { db: String, account: Option<String> },
+    Get {
+        db_file: String,
+        account: Option<String>,
+    },
     /// Create an empty pwm file.
     Init { name: String },
 }
