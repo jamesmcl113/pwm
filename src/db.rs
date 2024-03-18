@@ -58,7 +58,8 @@ impl DB {
     ) -> Result<()> {
         DB::check_file_path(&file_path)?;
 
-        let mut config: Config = Config::from_file(&file_path, &self.password)?;
+        let config_bytes = std::fs::read(&file_path)?;
+        let mut config: Config = Config::from_bytes(config_bytes, &self.password)?;
 
         config.add_entry(account, entry)?;
 
@@ -73,24 +74,70 @@ impl DB {
     ) -> Result<store::Entry> {
         DB::check_file_path(&file_path)?;
 
-        let config = Config::from_file(&file_path, &self.password)?;
+        let config_bytes = std::fs::read(&file_path)?;
+        let config: Config = Config::from_bytes(config_bytes, &self.password)?;
 
         config
             .get_entry(account)
             .map(|entry| entry.clone())
             .ok_or(anyhow!("No entry found for account `{account}`"))
     }
+
     pub fn get_all_entries(
         &self,
         file_path: impl AsRef<Path>,
     ) -> Result<Vec<(String, store::Entry)>> {
         DB::check_file_path(&file_path)?;
 
-        let config = Config::from_file(&file_path, &self.password)?;
+        let config_bytes = std::fs::read(&file_path)?;
+        let config: Config = Config::from_bytes(config_bytes, &self.password)?;
 
         Ok(config
             .get_all_entries()
             .map(|(acc, entry)| (acc.clone(), entry.clone()))
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use tempdir::TempDir;
+
+    const PASS: &str = "PASSWORD";
+
+    #[test]
+    fn empty_db() {
+        let dir = TempDir::new("test_db").unwrap();
+        let path_to_db = dir.path().join("testdb.pwm");
+        let db = DB::new(PASS);
+
+        db.create_empty(&path_to_db).unwrap();
+
+        assert_eq!(db.get_all_entries(&path_to_db).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn store_password() {
+        let dir = TempDir::new("test_db").unwrap();
+        let path_to_db = dir.path().join("testdb.pwm");
+        let db = DB::new(PASS);
+
+        db.create_empty(&path_to_db).unwrap();
+
+        db.add_entry(
+            &path_to_db,
+            "example.com",
+            store::Entry {
+                username: "foo".to_string(),
+                password: "bar".to_string(),
+            },
+        )
+        .unwrap();
+
+        let entry = db.get_entry(&path_to_db, "example.com").unwrap();
+
+        assert_eq!(entry.username, "foo");
+        assert_eq!(entry.password, "bar");
     }
 }

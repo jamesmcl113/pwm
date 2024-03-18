@@ -49,7 +49,6 @@ impl Config {
     }
 
     pub fn get_entry(&self, account: &str) -> Option<&Entry> {
-        //self.store.get_password(account)
         self.store.get_entry(account)
     }
 
@@ -58,9 +57,7 @@ impl Config {
     }
 
     /// Reads and decrypts config from file.
-    pub fn from_file(path: impl AsRef<Path>, db_password: &str) -> Result<Self> {
-        let contents = std::fs::read(path)?;
-
+    pub fn from_bytes(contents: Vec<u8>, db_password: &str) -> Result<Self> {
         let nonce = &contents[0..24];
         let payload = &contents[24..];
 
@@ -90,11 +87,8 @@ impl Config {
 
 #[cfg(test)]
 mod test {
-    use std::collections::HashMap;
-
-    use tempdir::TempDir;
-
     use super::*;
+    use std::collections::HashMap;
 
     const PASSWORD: &str = "TEST_PASS";
 
@@ -112,40 +106,41 @@ mod test {
     }
 
     #[test]
-    /// We can create an empty db, write it to disk and decrypt it. The password store should be
-    /// empty.
-    fn empty_db() {
-        let dir = TempDir::new("empty_db").unwrap();
-        let db_name = "my_test_db";
-
-        create_empty_db(db_name, PASSWORD, dir.path()).unwrap();
-
-        let config: Config =
-            Config::from_file(dir.path().join("my_test_db.pwm"), PASSWORD).unwrap();
-
-        assert!(config.store.is_empty());
+    fn correct_password() {
+        let config = Config::new();
+        let config_bytes = config.encrypt_bytes(PASSWORD).unwrap();
+        let res = Config::from_bytes(config_bytes, PASSWORD);
+        assert!(res.is_ok());
     }
 
     #[test]
-    /// We can write db to disk, add password to db on disk and read the password from the store.
-    fn store_password() {
-        let config = mock_config();
-        let dir = TempDir::new("store_password").unwrap();
-        let file_path = dir.path().join("test.pwm");
+    fn wrong_password() {
+        let config = Config::new();
+        let config_bytes = config.encrypt_bytes(PASSWORD).unwrap();
+        let res = Config::from_bytes(config_bytes, "WRONG_PASSWORD");
+        assert!(res.is_err());
+    }
 
-        create_db("test", PASSWORD, config, dir.path()).unwrap();
-        add_entry(
-            &file_path,
-            PASSWORD,
-            "baz",
-            Entry {
-                username: "example.com".to_string(),
-                password: "pass3".to_string(),
-            },
-        )
-        .unwrap();
-        let entry = get_entry(&file_path, PASSWORD, "baz").unwrap();
+    #[test]
+    fn add_entry() {
+        let mut config = Config::new();
+        config
+            .add_entry(
+                "example.com",
+                Entry {
+                    username: "foo".to_string(),
+                    password: "baz".to_string(),
+                },
+            )
+            .unwrap();
 
-        assert_eq!(entry.password, String::from("pass3"));
+        let config_bytes = config.encrypt_bytes(PASSWORD).unwrap();
+
+        let config_from_bytes = Config::from_bytes(config_bytes, PASSWORD).unwrap();
+
+        let entry = config_from_bytes.get_entry("example.com").unwrap();
+
+        assert_eq!(entry.username, "foo");
+        assert_eq!(entry.password, "baz");
     }
 }
